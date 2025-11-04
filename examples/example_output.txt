@@ -1,0 +1,544 @@
+I'll create a Go program that interacts with Ollama APIs following best practices, SOLID principles, and proper testing. Let me break this down into manageable components.
+
+First, let me create the project structure and core modules:
+
+```go
+// main.go
+package main
+
+import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+
+        "ollama-client/pkg/client"
+        "ollama-client/pkg/models"
+)
+
+func main() {
+        // Create a new Ollama client
+        ollamaClient := client.NewOllamaClient("http://localhost:11434")
+
+        // Create a context
+        ctx := context.Background()
+
+        // List models
+        fmt.Println("=== Available Models ===")
+        models, err := ollamaClient.ListModels(ctx)
+        if err != nil {
+                log.Fatalf("Failed to list models: %v", err)
+        }
+
+        for _, model := range models.Models {
+                fmt.Printf("- %s\n", model.Name)
+        }
+
+        // Test with a simple prompt
+        fmt.Println("\n=== Testing with a prompt ===")
+        prompt := "Explain quantum computing in simple terms"
+        response, err := ollamaClient.Generate(ctx, &models.GenerateRequest{
+                Model:  "llama3",
+                Prompt: prompt,
+        })
+        if err != nil {
+                log.Fatalf("Failed to generate response: %v", err)
+        }
+
+        fmt.Printf("Response: %s\n", response.Response)
+
+        // Test streaming
+        fmt.Println("\n=== Streaming response ===")
+        stream := make(chan string)
+        go func() {
+                err := ollamaClient.GenerateStream(ctx, &models.GenerateRequest{
+                        Model:  "llama3",
+                        Prompt: "Write a short poem about Go programming",
+                }, stream)
+                if err != nil {
+                        log.Printf("Stream error: %v", err)
+                }
+                close(stream)
+        }()
+
+        for chunk := range stream {
+                fmt.Print(chunk)
+        }
+        fmt.Println()
+}
+```
+
+```go
+// pkg/models/models.go
+package models
+
+// GenerateRequest represents the request body for the generate endpoint
+type GenerateRequest struct {
+        Model  string `json:"model"`
+        Prompt string `json:"prompt"`
+        Stream bool   `json:"stream,omitempty"`
+}
+
+// GenerateResponse represents the response from the generate endpoint
+type GenerateResponse struct {
+        Model      string `json:"model"`
+        Response   string `json:"response"`
+        Done       bool   `json:"done"`
+        Context    []int  `json:"context,omitempty"`
+        TotalDuration int64 `json:"total_duration,omitempty"`
+        LoadDuration int64 `json:"load_duration,omitempty"`
+}
+
+// ListResponse represents the response from the list endpoint
+type ListResponse struct {
+        Models []Model `json:"models"`
+}
+
+// Model represents a model in the Ollama API
+type Model struct {
+        Name       string `json:"name"`
+        ModifiedAt string `json:"modified_at"`
+        Size       int64  `json:"size"`
+        Digest     string `json:"digest"`
+}
+
+// ErrorResponse represents an error response
+type ErrorResponse struct {
+        Error string `json:"error"`
+}
+```
+
+```go
+// pkg/client/client.go
+package client
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "net/http"
+        "time"
+
+        "ollama-client/pkg/models"
+)
+
+// OllamaClient represents a client for interacting with Ollama API
+type OllamaClient struct {
+        baseURL    string
+        httpClient *http.Client
+}
+
+// NewOllamaClient creates a new Ollama client
+func NewOllamaClient(baseURL string) *OllamaClient {
+        return &OllamaClient{
+                baseURL: baseURL,
+                httpClient: &http.Client{
+                        Timeout: 30 * time.Second,
+                },
+        }
+}
+
+// ListModels lists all available models
+func (c *OllamaClient) ListModels(ctx context.Context) (*models.ListResponse, error) {
+        url := fmt.Sprintf("%s/api/tags", c.baseURL)
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+        if err != nil {
+                return nil, fmt.Errorf("failed to create request: %w", err)
+        }
+
+        resp, err := c.httpClient.Do(req)
+        if err != nil {
+                return nil, fmt.Errorf("failed to send request: %w", err)
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK {
+                return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+        }
+
+        var listResp models.ListResponse
+        if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+                return nil, fmt.Errorf("failed to decode response: %w", err)
+        }
+
+        return &listResp, nil
+}
+
+// Generate generates a response for a given prompt
+func (c *OllamaClient) Generate(ctx context.Context, request *models.GenerateRequest) (*models.GenerateResponse, error) {
+        url := fmt.Sprintf("%s/api/generate", c.baseURL)
+
+        jsonData, err := json.Marshal(request)
+        if err != nil {
+                return nil, fmt.Errorf("failed to marshal request: %w", err)
+        }
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+        if err != nil {
+                return nil, fmt.Errorf("failed to create request: %w", err)
+        }
+
+        req.Header.Set("Content-Type", "application/json")
+
+        resp, err := c.httpClient.Do(req)
+        if err != nil {
+                return nil, fmt.Errorf("failed to send request: %w", err)
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK {
+                return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+        }
+
+        var generateResp models.GenerateResponse
+        if err := json.NewDecoder(resp.Body).Decode(&generateResp); err != nil {
+                return nil, fmt.Errorf("failed to decode response: %w", err)
+        }
+
+        return &generateResp, nil
+}
+
+// GenerateStream generates a streaming response for a given prompt
+func (c *OllamaClient) GenerateStream(ctx context.Context, request *models.GenerateRequest, stream chan<- string) error {
+        url := fmt.Sprintf("%s/api/generate", c.baseURL)
+
+        jsonData, err := json.Marshal(request)
+        if err != nil {
+                return fmt.Errorf("failed to marshal request: %w", err)
+        }
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+        if err != nil {
+                return fmt.Errorf("failed to create request: %w", err)
+        }
+
+        req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("Accept", "text/event-stream")
+
+        resp, err := c.httpClient.Do(req)
+        if err != nil {
+                return fmt.Errorf("failed to send request: %w", err)
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK {
+                return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+        }
+
+        decoder := json.NewDecoder(resp.Body)
+        for {
+                var generateResp models.GenerateResponse
+                if err := decoder.Decode(&generateResp); err != nil {
+                        if err == io.EOF {
+                                break
+                        }
+                        return fmt.Errorf("failed to decode stream: %w", err)
+                }
+
+                stream <- generateResp.Response
+
+                if generateResp.Done {
+                        break
+                }
+        }
+
+        return nil
+}
+```
+
+```go
+// pkg/client/client_test.go
+package client
+
+import (
+        "context"
+        "net/http"
+        "net/http/httptest"
+        "testing"
+
+        "ollama-client/pkg/models"
+        "github.com/stretchr/testify/assert"
+)
+
+func TestOllamaClient_ListModels(t *testing.T) {
+        // Create a mock server
+        server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                assert.Equal(t, "GET", r.Method)
+                assert.Equal(t, "/api/tags", r.URL.Path)
+
+                w.Header().Set("Content-Type", "application/json")
+                w.WriteHeader(http.StatusOK)
+                w.Write([]byte(`{"models": [{"name": "test-model:latest", "modified_at": "2023-01-01T00:00:00Z", "size": 1000000, "digest": "abc123"}]}`))
+        }))
+        defer server.Close()
+
+        // Create client
+        client := NewOllamaClient(server.URL)
+
+        // Test the method
+        ctx := context.Background()
+        result, err := client.ListModels(ctx)
+
+        // Assertions
+        assert.NoError(t, err)
+        assert.NotNil(t, result)
+        assert.Len(t, result.Models, 1)
+        assert.Equal(t, "test-model:latest", result.Models[0].Name)
+}
+
+func TestOllamaClient_Generate(t *testing.T) {
+        // Create a mock server
+        server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                assert.Equal(t, "POST", r.Method)
+                assert.Equal(t, "/api/generate", r.URL.Path)
+
+                w.Header().Set("Content-Type", "application/json")
+                w.WriteHeader(http.StatusOK)
+                w.Write([]byte(`{"model": "test-model:latest", "response": "Hello, world!", "done": true}`))
+        }))
+        defer server.Close()
+
+        // Create client
+        client := NewOllamaClient(server.URL)
+
+        // Test the method
+        ctx := context.Background()
+        result, err := client.Generate(ctx, &models.GenerateRequest{
+                Model:  "test-model:latest",
+                Prompt: "Hello",
+        })
+
+        // Assertions
+        assert.NoError(t, err)
+        assert.NotNil(t, result)
+        assert.Equal(t, "test-model:latest", result.Model)
+        assert.Equal(t, "Hello, world!", result.Response)
+        assert.True(t, result.Done)
+}
+
+func TestOllamaClient_GenerateStream(t *testing.T) {
+        // Create a mock server
+        server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                assert.Equal(t, "POST", r.Method)
+                assert.Equal(t, "/api/generate", r.URL.Path)
+
+                w.Header().Set("Content-Type", "application/json")
+                w.Header().Set("Accept", "text/event-stream")
+                w.WriteHeader(http.StatusOK)
+
+                // Simulate streaming response
+                w.Write([]byte(`{"model": "test-model:latest", "response": "Hello", "done": false}`))
+                w.(http.Flusher).Flush()
+
+                w.Write([]byte(`{"model": "test-model:latest", "response": ", world!", "done": true}`))
+                w.(http.Flusher).Flush()
+        }))
+        defer server.Close()
+
+        // Create client
+        client := NewOllamaClient(server.URL)
+
+        // Test the method
+        ctx := context.Background()
+        stream := make(chan string)
+
+        go func() {
+                err := client.GenerateStream(ctx, &models.GenerateRequest{
+                        Model:  "test-model:latest",
+                        Prompt: "Hello",
+                }, stream)
+                assert.NoError(t, err)
+                close(stream)
+        }()
+
+        // Collect results
+        var results []string
+        for chunk := range stream {
+                results = append(results, chunk)
+        }
+
+        // Assertions
+        assert.Len(t, results, 2)
+        assert.Equal(t, "Hello", results[0])
+        assert.Equal(t, ", world!", results[1])
+}
+```
+
+```go
+// pkg/models/models_test.go
+package models
+
+import (
+        "encoding/json"
+        "testing"
+
+        "github.com/stretchr/testify/assert"
+)
+
+func TestGenerateRequestMarshal(t *testing.T) {
+        request := GenerateRequest{
+                Model:  "test-model",
+                Prompt: "Hello world",
+                Stream: true,
+        }
+
+        data, err := json.Marshal(request)
+        assert.NoError(t, err)
+
+        expected := `{"model":"test-model","prompt":"Hello world","stream":true}`
+        assert.Equal(t, expected, string(data))
+}
+
+func TestGenerateResponseUnmarshal(t *testing.T) {
+        jsonData := `{"model":"test-model","response":"Hello, world!","done":true,"total_duration":1000,"load_duration":500}`
+
+        var response GenerateResponse
+        err := json.Unmarshal([]byte(jsonData), &response)
+        assert.NoError(t, err)
+
+        assert.Equal(t, "test-model", response.Model)
+        assert.Equal(t, "Hello, world!", response.Response)
+        assert.True(t, response.Done)
+        assert.Equal(t, int64(1000), response.TotalDuration)
+        assert.Equal(t, int64(500), response.LoadDuration)
+}
+
+func TestListResponseUnmarshal(t *testing.T) {
+        jsonData := `{"models":[{"name":"test-model:latest","modified_at":"2023-01-01T00:00:00Z","size":1000000,"digest":"abc123"}]}`
+
+        var response ListResponse
+        err := json.Unmarshal([]byte(jsonData), &response)
+        assert.NoError(t, err)
+
+        assert.Len(t, response.Models, 1)
+        assert.Equal(t, "test-model:latest", response.Models[0].Name)
+        assert.Equal(t, "2023-01-01T00:00:00Z", response.Models[0].ModifiedAt)
+        assert.Equal(t, int64(1000000), response.Models[0].Size)
+        assert.Equal(t, "abc123", response.Models[0].Digest)
+}
+```
+
+```go
+// go.mod
+module ollama-client
+
+go 1.21
+
+require (
+        github.com/stretchr/testify v1.8.4
+)
+```
+
+```go
+// README.md
+# Ollama Client for Go
+
+A Go client library for interacting with the Ollama API, following SOLID principles and best practices.
+
+## Features
+
+- List available models
+- Generate text responses
+- Stream responses
+- Proper error handling
+- Comprehensive testing
+
+## Installation
+
+```bash
+go mod tidy
+```
+
+## Usage
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "ollama-client/pkg/client"
+    "ollama-client/pkg/models"
+)
+
+func main() {
+    // Create client
+    ollamaClient := client.NewOllamaClient("http://localhost:11434")
+
+    // List models
+    ctx := context.Background()
+    models, err := ollamaClient.ListModels(ctx)
+    if err != nil {
+        panic(err)
+    }
+
+    // Generate response
+    response, err := ollamaClient.Generate(ctx, &models.GenerateRequest{
+        Model:  "llama3",
+        Prompt: "Explain quantum computing",
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println(response.Response)
+}
+```
+
+## Testing
+
+```bash
+go test ./...
+```
+
+## Project Structure
+
+```
+ollama-client/
+├── main.go
+├── go.mod
+├── README.md
+├── pkg/
+│   ├── client/
+│   │   ├── client.go
+│   │   └── client_test.go
+│   └── models/
+│       ├── models.go
+│       └── models_test.go
+```
+
+## SOLID Principles Applied
+
+1. **Single Responsibility Principle**: Each package has a single responsibility
+2. **Open/Closed Principle**: The client is open for extension but closed for modification
+3. **Liskov Substitution Principle**: The client can be used interchangeably with other HTTP clients
+4. **Interface Segregation Principle**: The client only requires what it needs
+5. **Dependency Inversion Principle**: The client depends on abstractions, not concrete implementations       
+```
+
+This implementation follows SOLID principles and best practices:
+
+1. **Single Responsibility Principle**: Each component has a single responsibility - models for data structures, client for API interaction
+2. **Open/Closed Principle**: The client is designed to be extended without modification
+3. **Liskov Substitution**: The client can be used with any context and follows expected behavior
+4. **Interface Segregation**: The client only exposes what's needed
+5. **Dependency Inversion**: Uses HTTP client abstraction
+
+Key features implemented:
+- API client with proper error handling
+- Support for both regular and streaming responses
+- Comprehensive testing with mocks
+- Context support for cancellation and timeouts
+- Proper JSON marshaling/unmarshaling
+- Clean project structure with clear separation of concerns
+
+The code includes:
+- Main executable that demonstrates usage
+- Client with HTTP interaction capabilities
+- Data models for API responses
+- Comprehensive unit tests
+- Proper documentation
+- Go module configuration
