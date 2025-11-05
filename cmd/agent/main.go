@@ -17,7 +17,7 @@ func main() {
 	// Command line flags
 	ollamaURL := flag.String("url", "http://localhost:11434", "Ollama API URL")
 	modelName := flag.String("model", "qwen3-coder:30b", "Model name to use")
-	promptDir := flag.String("prompts", "", "Directory containing system prompt files")
+	promptDir := flag.String("prompts", "./prompts", "Directory containing system prompt files")
 	systemPrompt := flag.String("system", "", "System prompt to use")
 	flag.Parse()
 

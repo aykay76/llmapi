@@ -265,6 +265,13 @@ func (c *Client) StreamGenerate(req *GenerateRequest, onChunk func(string) error
 			if part == "" {
 				part = chunk.Delta
 			}
+			// Fallback: some Ollama/streaming formats use other keys (eg. "text" or "content").
+			// Try to extract a string from the raw JSON if response/delta are empty.
+			if part == "" {
+				if f := extractTextFromJSON(line); f != "" {
+					part = f
+				}
+			}
 			if chunk.Error != "" {
 				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
@@ -346,6 +353,12 @@ func (c *Client) StreamGenerateWithContext(ctx context.Context, reqBody *Generat
 			if part == "" {
 				part = chunk.Delta
 			}
+			// Fallback to other common keys if response/delta empty
+			if part == "" {
+				if f := extractTextFromJSON(line); f != "" {
+					part = f
+				}
+			}
 			if chunk.Error != "" {
 				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
@@ -417,6 +430,12 @@ func (c *Client) StreamChat(req *ChatRequest, onChunk func(string) error) error 
 			part := chunk.Response
 			if part == "" {
 				part = chunk.Delta
+			}
+			// Fallback to other common keys if response/delta empty
+			if part == "" {
+				if f := extractTextFromJSON(line); f != "" {
+					part = f
+				}
 			}
 			if chunk.Error != "" {
 				_ = resp.Body.Close()
@@ -497,6 +516,12 @@ func (c *Client) StreamChatWithContext(ctx context.Context, reqBody *ChatRequest
 			if part == "" {
 				part = chunk.Delta
 			}
+			// Fallback to other common keys if response/delta empty
+			if part == "" {
+				if f := extractTextFromJSON(line); f != "" {
+					part = f
+				}
+			}
 			if chunk.Error != "" {
 				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
@@ -527,6 +552,73 @@ func (c *Client) StreamChatWithContext(ctx context.Context, reqBody *ChatRequest
 
 	_ = resp.Body.Close()
 	return nil
+}
+
+// extractTextFromJSON attempts to pull a reasonable text chunk out of a
+// streaming JSON line when the known fields (response/delta) are empty.
+// This handles slight variations in streaming formats (eg. "text", "content",
+// or nested structures under "choices" / "message").
+func extractTextFromJSON(line string) string {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		return ""
+	}
+
+	// common top-level keys
+	if v, ok := m["text"].(string); ok && v != "" {
+		return v
+	}
+	if v, ok := m["content"].(string); ok && v != "" {
+		return v
+	}
+
+	// choices array (common in some streaming formats)
+	if choices, ok := m["choices"].([]interface{}); ok && len(choices) > 0 {
+		for _, ch := range choices {
+			if chm, ok := ch.(map[string]interface{}); ok {
+				if t, ok := chm["text"].(string); ok && t != "" {
+					return t
+				}
+				if delta, ok := chm["delta"].(map[string]interface{}); ok {
+					if c, ok := delta["content"].(string); ok && c != "" {
+						return c
+					}
+					if c, ok := delta["text"].(string); ok && c != "" {
+						return c
+					}
+				}
+				if msg, ok := chm["message"].(map[string]interface{}); ok {
+					if content, ok := msg["content"].(string); ok && content != "" {
+						return content
+					}
+				}
+			}
+		}
+	}
+
+	// fallback: first string value we find in the top-level map
+	for _, v := range m {
+		switch s := v.(type) {
+		case string:
+			if s != "" {
+				return s
+			}
+		case map[string]interface{}:
+			for _, v2 := range s {
+				if s2, ok := v2.(string); ok && s2 != "" {
+					return s2
+				}
+			}
+		case []interface{}:
+			for _, e := range s {
+				if s2, ok := e.(string); ok && s2 != "" {
+					return s2
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 // Embeddings API Methods

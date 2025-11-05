@@ -21,6 +21,7 @@ type Agent struct {
 	actionParser        *ActionParser
 	workDir             string
 	autoExecuteActions  bool
+	pendingActions      []Action
 }
 
 // NewAgent creates a new coding agent
@@ -122,11 +123,27 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 	}
 	messages = append(messages, a.conversationHistory...)
 
-	// Create chat request
-	req := &ollama.ChatRequest{
-		Model:    a.modelName,
-		Messages: messages,
-		Stream:   true,
+	// Create generate request by flattening the conversation history into
+	// a single prompt. Some Ollama setups return streaming text under the
+	// generate endpoint; use that to avoid empty-chat-format responses.
+	// The system prompt is supplied separately in the GenerateRequest.System
+	// field when available.
+	var promptBuilder strings.Builder
+	for i, m := range messages {
+		if i > 0 {
+			promptBuilder.WriteString("\n\n")
+		}
+		role := strings.Title(m.Role)
+		promptBuilder.WriteString(role)
+		promptBuilder.WriteString(": ")
+		promptBuilder.WriteString(m.Content)
+	}
+
+	req := &ollama.GenerateRequest{
+		Model:  a.modelName,
+		System: a.systemPrompt,
+		Prompt: promptBuilder.String(),
+		Stream: true,
 	}
 
 	// Accumulate assistant response
@@ -136,8 +153,8 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 		return onChunk(chunk)
 	}
 
-	// Stream the response
-	err := a.client.StreamChatWithContext(ctx, req, wrappedOnChunk)
+	// Stream the response (use Generate stream to match server streaming format)
+	err := a.client.StreamGenerateWithContext(ctx, req, wrappedOnChunk)
 	if err != nil {
 		return fmt.Errorf("failed to stream chat: %w", err)
 	}
@@ -148,7 +165,7 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 		Content: fullResponse.String(),
 	})
 
-	// Parse and potentially execute actions
+	// Parse actions
 	actions := a.actionParser.Parse(fullResponse.String())
 	if len(actions) > 0 {
 		fmt.Printf("\n\n📋 Detected %d action(s):\n", len(actions))
@@ -156,11 +173,15 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 			fmt.Printf("  %d. %s\n", i+1, action.String())
 		}
 
+		// Store as pending actions so the user can run /execute later
+		a.pendingActions = actions
+
 		if a.autoExecuteActions {
 			fmt.Println("\n⚙️  Auto-executing actions...")
 			if err := ExecuteActions(ctx, actions, a.workDir); err != nil {
 				return fmt.Errorf("failed to execute actions: %w", err)
 			}
+			a.pendingActions = nil
 			fmt.Println("✅ All actions completed successfully")
 		} else {
 			fmt.Println("\n💡 Tip: Use /execute to run these actions, or enable auto-execution with /auto on")
@@ -267,10 +288,18 @@ func (a *Agent) handleCommand(cmd string) error {
 			} else {
 				fmt.Printf("Current system prompt:\n%s\n", a.systemPrompt)
 			}
-			fmt.Println("Usage: /system <message>")
+			fmt.Println("Usage: /system <name|message>  (if <name> matches a loaded prompt it will be used)")
 		} else {
-			a.systemPrompt = strings.Join(parts[1:], " ")
-			fmt.Println("✓ System prompt updated")
+			// If the argument matches a loaded prompt name, use that prompt.
+			nameOrMsg := strings.Join(parts[1:], " ")
+			if prompt, ok := a.systemPrompts[nameOrMsg]; ok {
+				a.systemPrompt = prompt
+				fmt.Printf("✓ Loaded system prompt: %s\n", nameOrMsg)
+			} else {
+				// No matching prompt name — treat the argument as the inline system message.
+				a.systemPrompt = nameOrMsg
+				fmt.Println("✓ System prompt updated")
+			}
 		}
 
 	case "/prompt":
@@ -335,6 +364,19 @@ func (a *Agent) handleCommand(cmd string) error {
 
 	case "/exit", "/quit":
 		return fmt.Errorf("exit")
+
+	case "/execute":
+		if len(a.pendingActions) == 0 {
+			fmt.Println("No pending actions to execute")
+			return nil
+		}
+		fmt.Println("\n⚙️  Executing pending actions...")
+		// Execute with a background context; REPL has its own cancellation elsewhere
+		if err := ExecuteActions(context.Background(), a.pendingActions, a.workDir); err != nil {
+			return fmt.Errorf("execution failed: %w", err)
+		}
+		a.pendingActions = nil
+		fmt.Println("✅ All actions completed successfully")
 
 	default:
 		return fmt.Errorf("unknown command: %s (type /help for available commands)", parts[0])
