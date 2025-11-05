@@ -302,9 +302,9 @@ func (p *ActionParser) Parse(response string) []Action {
 		}
 	}
 
-	// Next, detect generic fenced code blocks (```html, ```js, etc.) and
-	// infer filenames when none are explicitly provided. This handles
-	// model outputs that return code but omit filenames.
+	// Next, detect generic fenced code blocks (```html, ```js, etc.) that are
+	// explicitly marked for file creation. We no longer auto-create files from
+	// all code blocks to avoid creating files from example code.
 	nameCount := map[string]int{}
 	for _, match := range p.fencedCodeRegex.FindAllStringSubmatch(response, -1) {
 		if len(match) < 3 {
@@ -313,65 +313,33 @@ func (p *ActionParser) Parse(response string) []Action {
 		lang := strings.ToLower(strings.TrimSpace(match[1]))
 		body := match[2]
 
-		// Try to extract filename from common comment patterns
+		// Only process code blocks that are explicitly marked for file creation
 		var filename string
-		// HTML comment: <!-- filename: index.html -->
-		htmlFilenameRe := regexp.MustCompile(`(?i)<!--\s*filename\s*:\s*(\S+)\s*-->|<!--\s*file\s*:\s*(\S+)\s*-->`)
-		// Line comment: // filename: app.js or # filename: foo
-		lineCommentRe := regexp.MustCompile(`(?m)^[ \t]*(?:\/\/|#)\s*filename\s*:\s*(\S+)`)
-		// Block comment: /* filename: app.js */
-		blockCommentRe := regexp.MustCompile(`(?s)/\*\s*filename\s*:\s*(\S+)\s*\*/`)
-
-		if lang == "html" {
-			if m := htmlFilenameRe.FindStringSubmatch(body); m != nil {
-				if m[1] != "" {
-					filename = m[1]
-				} else if m[2] != "" {
-					filename = m[2]
-				}
+		// Look for the create-file marker in comments based on language
+		var markerMatch []string
+		switch lang {
+		case "html":
+			// HTML comment
+			markerMatch = regexp.MustCompile(`(?i)<!--\s*@create-file:\s*(\S+)\s*-->`).FindStringSubmatch(body)
+		case "css", "js", "javascript", "typescript", "java", "c", "cpp", "go":
+			// Block comment
+			markerMatch = regexp.MustCompile(`(?s)/\*\s*@create-file:\s*(\S+)\s*\*/`).FindStringSubmatch(body)
+			if markerMatch == nil {
+				// Line comment
+				markerMatch = regexp.MustCompile(`(?m)^[ \t]*//\s*@create-file:\s*(\S+)`).FindStringSubmatch(body)
 			}
-		}
-		if filename == "" {
-			if m := lineCommentRe.FindStringSubmatch(body); m != nil {
-				filename = m[1]
-			}
-		}
-		if filename == "" {
-			if m := blockCommentRe.FindStringSubmatch(body); m != nil {
-				filename = m[1]
-			}
+		default:
+			// Hash comment for other languages
+			markerMatch = regexp.MustCompile(`(?m)^[ \t]*#\s*@create-file:\s*(\S+)`).FindStringSubmatch(body)
 		}
 
-		// If still empty, pick a sensible default based on language or content
+		if markerMatch != nil && len(markerMatch) > 1 {
+			filename = markerMatch[1]
+		}
+
+		// Skip if no explicit filename was provided
 		if filename == "" {
-			switch lang {
-			case "html":
-				// if body looks like a full HTML page, use index.html
-				if strings.Contains(strings.ToLower(body), "<!doctype html") || strings.Contains(strings.ToLower(body), "<html") {
-					filename = "index.html"
-				} else {
-					filename = "index.html"
-				}
-			case "css":
-				filename = "style.css"
-			case "js", "javascript":
-				filename = "script.js"
-			case "ts":
-				filename = "script.ts"
-			case "json":
-				filename = "data.json"
-			case "md", "markdown":
-				filename = "README.md"
-			case "go":
-				filename = "main.go"
-			case "py":
-				filename = "main.py"
-			case "sh", "bash":
-				filename = "run.sh"
-			default:
-				// no language or unknown: use .txt
-				filename = "file.txt"
-			}
+			continue
 		}
 
 		// Sanitize filename (basic) and ensure uniqueness

@@ -18,6 +18,7 @@ type Agent struct {
 	client              *ollama.Client
 	systemPrompts       map[string]string
 	modelName           string
+	modelParams         *ModelParameters
 	conversationHistory []ollama.ChatMessage
 	systemPrompt        string
 	workDir             string
@@ -39,7 +40,7 @@ func NewAgent(ollamaClient *ollama.Client, modelName string) *Agent {
 		workDir = "."
 	}
 
-	return &Agent{
+	agent := &Agent{
 		client:              ollamaClient,
 		systemPrompts:       make(map[string]string),
 		modelName:           modelName,
@@ -48,6 +49,15 @@ func NewAgent(ollamaClient *ollama.Client, modelName string) *Agent {
 		workDir:             workDir,
 		autoExecuteActions:  false, // Default to false for safety
 	}
+
+	// Initialize model parameters
+	if info, err := ollamaClient.ShowModel(modelName); err == nil {
+		if params, err := parseModelParameters(info.Parameters); err == nil {
+			agent.modelParams = params
+		}
+	}
+
+	return agent
 }
 
 // LoadSystemPrompt loads a system prompt from a file
@@ -91,9 +101,7 @@ func (a *Agent) GetSystemPrompt(name string) (string, bool) {
 // SetSystemPrompt sets the active system prompt for the agent
 func (a *Agent) SetSystemPrompt(prompt string) {
 	a.systemPrompt = prompt
-}
-
-// SetWorkDir sets the working directory for action execution
+} // SetWorkDir sets the working directory for action execution
 func (a *Agent) SetWorkDir(dir string) {
 	a.workDir = dir
 }
@@ -172,15 +180,31 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 
 	// Print model statistics
 	fmt.Printf("\n📊 Model Stats:\n")
+
+	// Model context capacity
+	if a.modelParams != nil && a.modelParams.ContextLength > 0 {
+		fmt.Printf("  • Model Context: %d tokens\n", a.modelParams.ContextLength)
+	}
+
+	// Usage statistics
 	fmt.Printf("  • Context Messages: %d\n", len(messages))
 	fmt.Printf("  • Response Length: %d chars\n", len(fullResponse.String()))
 	fmt.Printf("  • Total Duration: %dms\n", lastChunk.TotalDuration/1e6)
 	fmt.Printf("  • Load Duration: %dms\n", lastChunk.LoadDuration/1e6)
-	if len(lastChunk.Context) > 0 {
-		fmt.Printf("  • Context Window: %d tokens\n", len(lastChunk.Context))
-	}
 
-	// Add assistant response to history
+	// Context window usage
+	if len(lastChunk.Context) > 0 {
+		usedTokens := len(lastChunk.Context)
+		if a.modelParams != nil && a.modelParams.ContextLength > 0 {
+			usagePercent := float64(usedTokens) / float64(a.modelParams.ContextLength) * 100
+			fmt.Printf("  • Context Usage: %d/%d tokens (%.1f%%)\n",
+				usedTokens, a.modelParams.ContextLength, usagePercent)
+		} else {
+			fmt.Printf("  • Context Tokens Used: %d\n", usedTokens)
+		}
+	} else {
+		fmt.Printf("  • Context Usage: No context used yet\n")
+	} // Add assistant response to history
 	a.conversationHistory = append(a.conversationHistory, ollama.ChatMessage{
 		Role:    "assistant",
 		Content: fullResponse.String(),
@@ -339,7 +363,48 @@ func (a *Agent) handleCommand(cmd string) error {
 			fmt.Println("Usage: /model <model-name>")
 		} else {
 			a.modelName = parts[1]
-			fmt.Printf("✓ Switched to model: %s\n", a.modelName)
+			// Get model parameters and details
+			if info, err := a.client.ShowModel(a.modelName); err == nil {
+				if params, err := parseModelParameters(info.Parameters); err == nil {
+					a.modelParams = params
+				}
+				fmt.Printf("\n🤖 Model Information:\n")
+				fmt.Printf("  • Name: %s\n", a.modelName)
+				if info.License != "" {
+					fmt.Printf("  • License: %s\n", info.License)
+				}
+				if info.Details.Format != "" {
+					fmt.Printf("  • Format: %s\n", info.Details.Format)
+				}
+				if info.Details.Family != "" {
+					fmt.Printf("  • Family: %s\n", info.Details.Family)
+				}
+				if info.Details.ParameterSize != "" {
+					fmt.Printf("  • Size: %s\n", info.Details.ParameterSize)
+				}
+				if info.Details.QuantizationLevel != "" {
+					fmt.Printf("  • Quantization: %s\n", info.Details.QuantizationLevel)
+				}
+
+				if a.modelParams != nil {
+					fmt.Printf("\n⚙️ Model Parameters:\n")
+					if a.modelParams.ContextLength > 0 {
+						fmt.Printf("  • Context Window: %d tokens\n", a.modelParams.ContextLength)
+					}
+					if a.modelParams.EmbeddingLength > 0 {
+						fmt.Printf("  • Embedding Size: %d\n", a.modelParams.EmbeddingLength)
+					}
+					if a.modelParams.GPULayers > 0 {
+						fmt.Printf("  • GPU Layers: %d\n", a.modelParams.GPULayers)
+					}
+					if a.modelParams.Template != "" {
+						fmt.Printf("  • Template: %s\n", a.modelParams.Template)
+					}
+				}
+				fmt.Printf("\n✓ Successfully switched to model\n")
+			} else {
+				fmt.Printf("✓ Switched to model: %s (could not fetch details: %v)\n", a.modelName, err)
+			}
 		}
 
 	case "/system":
