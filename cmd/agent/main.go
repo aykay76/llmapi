@@ -47,12 +47,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle interrupt signals
+	// Set up graceful shutdown for SIGTERM only
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		fmt.Println("\n\nReceived interrupt signal, shutting down...")
+		fmt.Println("\n\nReceived termination signal, shutting down...")
 		cancel()
 		os.Exit(0)
 	}()

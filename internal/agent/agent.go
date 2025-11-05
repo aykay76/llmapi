@@ -3,25 +3,28 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
 	"github.com/aykay76/llmapi/pkg/ollama"
 )
 
-// Agent represents a coding agent that uses Ollama for completions
+// Agent represents a coding agent that can interact with an LLM
 type Agent struct {
 	client              *ollama.Client
 	systemPrompts       map[string]string
 	modelName           string
 	conversationHistory []ollama.ChatMessage
 	systemPrompt        string
-	actionParser        *ActionParser
 	workDir             string
 	autoExecuteActions  bool
+	actionParser        *ActionParser
 	pendingActions      []Action
+	lastResponseStats   *ollama.GenerateResponse
 }
 
 // NewAgent creates a new coding agent
@@ -154,9 +157,27 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 	}
 
 	// Stream the response (use Generate stream to match server streaming format)
-	err := a.client.StreamGenerateWithContext(ctx, req, wrappedOnChunk)
+	var lastChunk ollama.GenerateResponse
+	wrappedOnChunkWithStats := func(chunk string) error {
+		if err := json.Unmarshal([]byte(chunk), &lastChunk); err == nil {
+			return wrappedOnChunk(lastChunk.Response)
+		}
+		return wrappedOnChunk(chunk)
+	}
+
+	err := a.client.StreamGenerateWithContext(ctx, req, wrappedOnChunkWithStats)
 	if err != nil {
 		return fmt.Errorf("failed to stream chat: %w", err)
+	}
+
+	// Print model statistics
+	fmt.Printf("\n📊 Model Stats:\n")
+	fmt.Printf("  • Context Messages: %d\n", len(messages))
+	fmt.Printf("  • Response Length: %d chars\n", len(fullResponse.String()))
+	fmt.Printf("  • Total Duration: %dms\n", lastChunk.TotalDuration/1e6)
+	fmt.Printf("  • Load Duration: %dms\n", lastChunk.LoadDuration/1e6)
+	if len(lastChunk.Context) > 0 {
+		fmt.Printf("  • Context Window: %d tokens\n", len(lastChunk.Context))
 	}
 
 	// Add assistant response to history
@@ -195,6 +216,27 @@ func (a *Agent) SendMessage(ctx context.Context, message string, onChunk func(st
 func (a *Agent) RunREPL(ctx context.Context) error {
 	reader := bufio.NewReader(os.Stdin)
 
+	// Set up signal handling for Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	defer signal.Stop(sigChan)
+
+	var currentCancel context.CancelFunc
+	var interrupted bool
+
+	// Handle Ctrl+C in a separate goroutine
+	go func() {
+		for range sigChan {
+			interrupted = true
+			if currentCancel != nil {
+				currentCancel()
+				fmt.Println("\n🛑 Interrupted! Stream stopped.")
+			} else {
+				fmt.Print("\n> ")
+			}
+		}
+	}()
+
 	fmt.Println("╔════════════════════════════════════════════════════════════╗")
 	fmt.Println("║          Coding Agent REPL - Powered by Ollama            ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
@@ -212,11 +254,26 @@ func (a *Agent) RunREPL(ctx context.Context) error {
 	fmt.Println()
 
 	for {
-		fmt.Print("\n> ")
+		if !interrupted {
+			fmt.Print("\n> ")
+		}
+		interrupted = false
+
 		input, err := reader.ReadString('\n')
 		if err != nil {
+			if err.Error() == "interrupt" {
+				continue
+			}
 			return fmt.Errorf("failed to read input: %w", err)
 		}
+
+		// Create a new cancellable context for this interaction
+		streamCtx, cancel := context.WithCancel(ctx)
+		currentCancel = cancel
+		defer func() {
+			currentCancel = nil
+			cancel()
+		}()
 
 		input = strings.TrimSpace(input)
 		if input == "" {
@@ -237,12 +294,16 @@ func (a *Agent) RunREPL(ctx context.Context) error {
 
 		// Send message and stream response
 		fmt.Println()
-		err = a.SendMessage(ctx, input, func(chunk string) error {
+		err = a.SendMessage(streamCtx, input, func(chunk string) error {
 			fmt.Print(chunk)
 			return nil
 		})
 		if err != nil {
-			fmt.Printf("\nError: %v\n", err)
+			if err == context.Canceled || strings.Contains(err.Error(), "context canceled") {
+				fmt.Print("\n💡 Tip: The response was interrupted. Continue with your next question!\n\n> ")
+				continue
+			}
+			fmt.Printf("\nError: %v\n\n> ", err)
 			continue
 		}
 		fmt.Println()
