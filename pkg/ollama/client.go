@@ -239,7 +239,7 @@ func (c *Client) StreamGenerate(req *GenerateRequest, onChunk func(string) error
 	// If server returned non-200, read body and return error
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -266,17 +266,17 @@ func (c *Client) StreamGenerate(req *GenerateRequest, onChunk func(string) error
 				part = chunk.Delta
 			}
 			if chunk.Error != "" {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
 			}
 			if part != "" {
 				if err := onChunk(part); err != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					return err
 				}
 			}
 			if chunk.Done {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil
 			}
 			continue
@@ -284,18 +284,18 @@ func (c *Client) StreamGenerate(req *GenerateRequest, onChunk func(string) error
 
 		// Not JSON — treat as raw chunk
 		if err := onChunk(line); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return err
 		}
 	}
 
 	// scanner finished — check error
 	if err := scanner.Err(); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("error reading stream: %w", err)
 	}
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -323,7 +323,7 @@ func (c *Client) StreamGenerateWithContext(ctx context.Context, reqBody *Generat
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -347,34 +347,34 @@ func (c *Client) StreamGenerateWithContext(ctx context.Context, reqBody *Generat
 				part = chunk.Delta
 			}
 			if chunk.Error != "" {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
 			}
 			if part != "" {
 				if err := onChunk(part); err != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					return err
 				}
 			}
 			if chunk.Done {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil
 			}
 			continue
 		}
 
 		if err := onChunk(line); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return err
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("error reading stream: %w", err)
 	}
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -395,7 +395,7 @@ func (c *Client) StreamChat(req *ChatRequest, onChunk func(string) error) error 
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -419,34 +419,34 @@ func (c *Client) StreamChat(req *ChatRequest, onChunk func(string) error) error 
 				part = chunk.Delta
 			}
 			if chunk.Error != "" {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
 			}
 			if part != "" {
 				if err := onChunk(part); err != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					return err
 				}
 			}
 			if chunk.Done {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil
 			}
 			continue
 		}
 
 		if err := onChunk(line); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return err
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("error reading stream: %w", err)
 	}
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -474,7 +474,7 @@ func (c *Client) StreamChatWithContext(ctx context.Context, reqBody *ChatRequest
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -498,34 +498,34 @@ func (c *Client) StreamChatWithContext(ctx context.Context, reqBody *ChatRequest
 				part = chunk.Delta
 			}
 			if chunk.Error != "" {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return fmt.Errorf("stream error: %s", chunk.Error)
 			}
 			if part != "" {
 				if err := onChunk(part); err != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					return err
 				}
 			}
 			if chunk.Done {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil
 			}
 			continue
 		}
 
 		if err := onChunk(line); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return err
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("error reading stream: %w", err)
 	}
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -620,7 +620,7 @@ func (c *Client) sendRequest(method, endpoint string, reqBody interface{}, respo
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)

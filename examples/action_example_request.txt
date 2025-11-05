@@ -1,0 +1,121 @@
+Example user request that would trigger action-based file creation:
+
+"Create a simple HTTP server in Go with proper error handling and a health check endpoint"
+
+Expected LLM response (with action tags):
+
+I'll create a simple HTTP server with error handling and a health check endpoint.
+
+<create_file>
+<path>cmd/server/main.go</path>
+<content>
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+)
+
+func main() {
+    mux := http.NewServeMux()
+    
+    // Health check endpoint
+    mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte("OK"))
+    })
+    
+    // Main endpoint
+    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "Hello, World!")
+    })
+    
+    server := &http.Server{
+        Addr:         ":8080",
+        Handler:      mux,
+        ReadTimeout:  10 * time.Second,
+        WriteTimeout: 10 * time.Second,
+    }
+    
+    // Start server in goroutine
+    go func() {
+        log.Printf("Server starting on %s", server.Addr)
+        if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("Server failed: %v", err)
+        }
+    }()
+    
+    // Wait for interrupt signal
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    
+    // Graceful shutdown
+    log.Println("Shutting down server...")
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    if err := server.Shutdown(ctx); err != nil {
+        log.Fatalf("Server forced to shutdown: %v", err)
+    }
+    
+    log.Println("Server stopped")
+}
+</content>
+</create_file>
+
+<create_file>
+<path>go.mod</path>
+<content>
+module httpserver
+
+go 1.21
+</content>
+</create_file>
+
+<create_file>
+<path>README.md</path>
+<content>
+# HTTP Server
+
+A simple HTTP server with health check endpoint.
+
+## Running
+
+```bash
+go run cmd/server/main.go
+```
+
+## Endpoints
+
+- `GET /` - Returns "Hello, World!"
+- `GET /health` - Health check endpoint
+
+## Features
+
+- Graceful shutdown on SIGINT/SIGTERM
+- Request timeouts
+- Proper error handling
+</content>
+</create_file>
+
+This server includes:
+- **Health check endpoint** at `/health` for monitoring
+- **Graceful shutdown** handling SIGINT/SIGTERM signals
+- **Request timeouts** to prevent hanging connections
+- **Proper error handling** throughout
+
+To test the endpoints (these are just examples, not actions to execute):
+```bash
+# Test main endpoint
+curl http://localhost:8080/
+
+# Test health check
+curl http://localhost:8080/health
+```

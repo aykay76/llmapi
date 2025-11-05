@@ -1,3 +1,11 @@
+// Complete Example - Demonstrates basic Ollama API usage with streaming
+//
+// Run this example with:
+//
+//	go run examples/complete_example.go
+//
+// Note: This file cannot be compiled together with agent_example.go
+// as they both have main functions. Run them separately.
 package main
 
 import (
