@@ -3,8 +3,10 @@ package agent
 import (
 	"bufio"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -60,20 +62,12 @@ func NewAgent(ollamaClient *ollama.Client, modelName string) *Agent {
 	return agent
 }
 
-// LoadSystemPrompt loads a system prompt from a file
-func (a *Agent) LoadSystemPrompt(name, filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read system prompt file: %w", err)
-	}
-
-	a.systemPrompts[name] = string(data)
-	return nil
-}
+//go:embed prompts/*
+var promptsFS embed.FS
 
 // LoadSystemPromptDirectory loads all system prompts from a directory
 func (a *Agent) LoadSystemPromptDirectory(dirPath string) error {
-	entries, err := os.ReadDir(dirPath)
+	entries, err := fs.ReadDir(promptsFS, dirPath)
 	if err != nil {
 		return fmt.Errorf("failed to read prompt directory: %w", err)
 	}
@@ -82,13 +76,24 @@ func (a *Agent) LoadSystemPromptDirectory(dirPath string) error {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".txt" {
 			name := filepath.Base(entry.Name())
 			name = name[:len(name)-4] // Remove .txt extension
-			err := a.LoadSystemPrompt(name, filepath.Join(dirPath, entry.Name()))
+			err := a.LoadSystemPrompt(name, "prompts/"+entry.Name())
 			if err != nil {
 				return fmt.Errorf("failed to load prompt %s: %w", name, err)
 			}
 		}
 	}
 
+	return nil
+}
+
+// LoadSystemPrompt loads a system prompt from a file
+func (a *Agent) LoadSystemPrompt(name, filePath string) error {
+	data, err := fs.ReadFile(promptsFS, filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read system prompt file: %w", err)
+	}
+
+	a.systemPrompts[name] = string(data)
 	return nil
 }
 
@@ -101,7 +106,9 @@ func (a *Agent) GetSystemPrompt(name string) (string, bool) {
 // SetSystemPrompt sets the active system prompt for the agent
 func (a *Agent) SetSystemPrompt(prompt string) {
 	a.systemPrompt = prompt
-} // SetWorkDir sets the working directory for action execution
+}
+
+// SetWorkDir sets the working directory for action execution
 func (a *Agent) SetWorkDir(dir string) {
 	a.workDir = dir
 }

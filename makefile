@@ -13,3 +13,8 @@ test:
 
 lint:
 	golangci-lint run
+
+dist:
+	rm C:\Users\alank\go\bin\agent.exe
+	go build -o agent.exe .\cmd\agent\main.go
+	mv agent.exe C:\Users\alank\go\bin
